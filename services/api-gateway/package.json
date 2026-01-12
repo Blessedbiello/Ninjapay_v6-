@@ -16,6 +16,8 @@
     "@ninjapay/database": "workspace:*",
     "@ninjapay/logger": "workspace:*",
     "@ninjapay/types": "workspace:*",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.95.0",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

@@ -18,6 +18,7 @@ import paymentLinkRoutes from './routes/payment-links.js';
 import webhookRoutes from './routes/webhooks.js';
 import payrollRoutes from './routes/payroll.js';
 import arciumCallbackRoutes from './routes/arcium-callbacks.js';
+import checkoutRoutes from './routes/checkout.js';
 
 const logger = createLogger('api-gateway');
 const app = express();
@@ -55,6 +56,7 @@ app.use('/v1/payment_links', paymentLinkRoutes);
 app.use('/v1/webhooks', webhookRoutes);
 app.use('/v1/payroll', payrollRoutes);
 app.use('/v1/arcium/callbacks', arciumCallbackRoutes);
+app.use('/v1/checkout', checkoutRoutes);
 
 // Error handling (must be last)
 app.use(errorHandler);

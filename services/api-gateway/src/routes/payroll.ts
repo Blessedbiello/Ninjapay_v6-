@@ -4,6 +4,7 @@ import { prisma } from '@ninjapay/database';
 import { asyncHandler, AppError } from '../middleware/error-handler.js';
 import { authenticateCompany } from '../middleware/authenticate.js';
 import { ArciumClientService } from '../services/arcium-client.js';
+import { getSettlementService } from '../services/settlement.js';
 import { createLogger } from '@ninjapay/logger';
 
 const router = Router();
@@ -520,6 +521,118 @@ router.post('/batches/:id/cancel', authenticateCompany, asyncHandler(async (req,
   res.json({
     success: true,
     data: serializeBatch(updated),
+    timestamp: Date.now(),
+  });
+}));
+
+/**
+ * POST /v1/payroll/batches/:id/settle - Direct L1 settlement (bypass MPC)
+ * Use this for faster processing when privacy is not required
+ */
+router.post('/batches/:id/settle', authenticateCompany, asyncHandler(async (req, res) => {
+  const batch = await prisma.payrollBatch.findFirst({
+    where: {
+      id: req.params.id,
+      companyId: req.companyId!,
+    },
+    include: {
+      payments: {
+        include: {
+          employee: {
+            select: { id: true, walletAddress: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!batch) {
+    throw new AppError('Batch not found', 404, 'BATCH_NOT_FOUND');
+  }
+
+  if (batch.status !== 'PENDING') {
+    throw new AppError(`Cannot settle batch in status: ${batch.status}`, 400, 'INVALID_STATUS');
+  }
+
+  // Update batch to processing
+  await prisma.payrollBatch.update({
+    where: { id: batch.id },
+    data: { status: 'PROCESSING' },
+  });
+
+  // Update all payment statuses
+  await prisma.payrollPayment.updateMany({
+    where: { batchId: batch.id },
+    data: { status: 'PROCESSING' },
+  });
+
+  // Process settlement via L1
+  const settlementService = getSettlementService();
+
+  try {
+    const result = await settlementService.processPayrollBatch(batch.id);
+
+    logger.info('Payroll batch settlement completed', {
+      batchId: batch.id,
+      success: result.success,
+      successCount: result.payments.filter(p => p.status === 'success').length,
+      failCount: result.payments.filter(p => p.status === 'failed').length,
+    });
+
+    // Fetch updated batch
+    const updatedBatch = await prisma.payrollBatch.findUnique({
+      where: { id: batch.id },
+      include: {
+        payments: {
+          include: {
+            employee: {
+              select: { id: true, name: true, walletAddress: true },
+            },
+          },
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...serializeBatch(updatedBatch, updatedBatch?.payments),
+        settlement_result: {
+          success: result.success,
+          payments: result.payments,
+        },
+      },
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    // Revert batch status on error
+    await prisma.payrollBatch.update({
+      where: { id: batch.id },
+      data: { status: 'FAILED' },
+    });
+
+    await prisma.payrollPayment.updateMany({
+      where: { batchId: batch.id },
+      data: { status: 'FAILED' },
+    });
+
+    throw new AppError(`Settlement failed: ${error.message}`, 500, 'SETTLEMENT_FAILED');
+  }
+}));
+
+/**
+ * GET /v1/payroll/balance - Get settlement wallet balance
+ */
+router.get('/balance', authenticateCompany, asyncHandler(async (_req, res) => {
+  const settlementService = getSettlementService();
+  const balance = await settlementService.getPayerBalance();
+
+  res.json({
+    success: true,
+    data: {
+      sol: balance.sol,
+      usdc: balance.usdc,
+    },
     timestamp: Date.now(),
   });
 }));
