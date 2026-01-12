@@ -1,0 +1,292 @@
+// ===========================================
+// NinjaPay v2 - Simplified Database Schema
+// 8 Core Models for B2B Payments + Payroll
+// ===========================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================
+// ENUMS
+// ===========================================
+
+enum KYCStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FINALIZED
+  FAILED
+  CANCELLED
+}
+
+enum ComputationStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum PayrollStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ===========================================
+// MERCHANT CHECKOUT MODELS
+// ===========================================
+
+/// Merchant - Core entity for payment acceptance
+model Merchant {
+  id            String    @id @default(cuid())
+  walletAddress String    @unique
+  businessName  String
+  email         String    @unique
+  kycStatus     KYCStatus @default(PENDING)
+  webhookUrl    String?
+  webhookSecret String?
+  settings      Json      @default("{}")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  apiKeys        ApiKey[]
+  paymentIntents PaymentIntent[]
+  paymentLinks   PaymentLink[]
+  webhooks       Webhook[]
+
+  @@index([walletAddress])
+  @@index([email])
+  @@map("merchants")
+}
+
+/// ApiKey - Authentication for merchant API access
+model ApiKey {
+  id          String    @id @default(cuid())
+  merchantId  String
+  keyHash     String    @unique  // bcrypt hash of the actual key
+  keyPrefix   String              // First 8 chars (sk_live_ or sk_test_) for fast lookup
+  name        String
+  permissions String[]  @default(["read", "write"])
+  active      Boolean   @default(true)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  merchant    Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([keyPrefix])
+  @@map("api_keys")
+}
+
+/// PaymentIntent - Stripe-like payment object with confidential amounts
+model PaymentIntent {
+  id                String            @id @default(cuid())
+  merchantId        String
+  recipient         String            // Solana wallet address
+  encryptedAmount   Bytes?            // Arcium-encrypted amount
+  amountCommitment  String            // Pedersen commitment (publicly verifiable)
+  currency          String            @default("USDC")
+  status            PaymentStatus     @default(PENDING)
+  description       String?
+  txSignature       String?           // Solana transaction signature
+  computationId     String?           // Arcium computation reference
+  computationStatus ComputationStatus @default(QUEUED)
+  computationError  String?
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  // Relations
+  merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  paymentLink       PaymentLink?      @relation(fields: [paymentLinkId], references: [id])
+  paymentLinkId     String?
+
+  @@index([merchantId, status])
+  @@index([merchantId, createdAt(sort: Desc)])
+  @@index([computationId])
+  @@map("payment_intents")
+}
+
+/// PaymentLink - Hosted checkout links
+model PaymentLink {
+  id          String    @id @default(cuid())
+  merchantId  String
+  url         String    @unique  // Short URL identifier
+  name        String
+  amount      Decimal?  @db.Decimal(20, 2)  // Optional fixed amount
+  currency    String    @default("USDC")
+  active      Boolean   @default(true)
+  maxUses     Int?                          // null = unlimited
+  usageCount  Int       @default(0)
+  expiresAt   DateTime?
+  successUrl  String?
+  cancelUrl   String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  merchant       Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  paymentIntents PaymentIntent[]
+
+  @@index([merchantId])
+  @@index([url])
+  @@index([active])
+  @@map("payment_links")
+}
+
+/// Webhook - Event delivery configuration
+model Webhook {
+  id          String   @id @default(cuid())
+  merchantId  String
+  url         String
+  events      String[] // ["payment.completed", "payment.failed", "payroll.completed"]
+  secret      String   // HMAC-SHA256 secret for signature verification
+  enabled     Boolean  @default(true)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  merchant   Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([merchantId])
+  @@map("webhooks")
+}
+
+/// WebhookDelivery - Delivery tracking and retry management
+model WebhookDelivery {
+  id             String    @id @default(cuid())
+  webhookId      String
+  eventType      String
+  payload        Json
+  responseStatus Int?
+  responseBody   String?
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  nextRetryAt    DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  // Relations
+  webhook        Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([nextRetryAt])
+  @@map("webhook_deliveries")
+}
+
+// ===========================================
+// ENTERPRISE PAYROLL MODELS
+// ===========================================
+
+/// Company - Payroll entity
+model Company {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  name          String
+  email         String   @unique
+  apiKeyHash    String?  // For API access (bcrypt)
+  apiKeyPrefix  String?  // For fast lookup
+  settings      Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  employees      Employee[]
+  payrollBatches PayrollBatch[]
+
+  @@index([walletAddress])
+  @@index([email])
+  @@map("companies")
+}
+
+/// Employee - Payroll recipient
+model Employee {
+  id            String   @id @default(cuid())
+  companyId     String
+  walletAddress String
+  name          String
+  email         String?
+  department    String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payments      PayrollPayment[]
+
+  @@unique([companyId, walletAddress])
+  @@index([companyId])
+  @@index([active])
+  @@map("employees")
+}
+
+/// PayrollBatch - Batch payment execution
+model PayrollBatch {
+  id             String        @id @default(cuid())
+  companyId      String
+  status         PayrollStatus @default(PENDING)
+  employeeCount  Int
+  processedCount Int           @default(0)
+  totalCommitment String?      // Aggregated commitment for audit
+  computationId  String?       // Arcium computation reference
+  scheduledDate  DateTime?
+  executedDate   DateTime?
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relations
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payments       PayrollPayment[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@map("payroll_batches")
+}
+
+/// PayrollPayment - Individual payment within a batch
+model PayrollPayment {
+  id               String        @id @default(cuid())
+  batchId          String
+  employeeId       String
+  encryptedAmount  Bytes         // Arcium-encrypted salary
+  amountCommitment String        // Pedersen commitment
+  txSignature      String?       // Solana transaction signature
+  status           PayrollStatus @default(PENDING)
+  errorMessage     String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  // Relations
+  batch            PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  employee         Employee      @relation(fields: [employeeId], references: [id])
+
+  @@index([batchId])
+  @@index([employeeId])
+  @@index([status])
+  @@map("payroll_payments")
+}
