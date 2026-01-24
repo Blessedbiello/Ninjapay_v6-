@@ -10,7 +10,10 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:arcium": "vitest run --config vitest.arcium.config.ts",
+    "test:arcium:live": "ARCIUM_TEST_MODE=live vitest run --config vitest.arcium.config.ts",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@ninjapay/database": "workspace:*",
