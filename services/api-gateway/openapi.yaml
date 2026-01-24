@@ -1,0 +1,1016 @@
+openapi: 3.1.0
+info:
+  title: NinjaPay API
+  description: |
+    Confidential payment infrastructure for Solana.
+
+    ## Authentication
+
+    NinjaPay uses API keys for authentication. Include your API key in the `X-API-Key` header:
+
+    ```
+    X-API-Key: sk_live_your_api_key_here
+    ```
+
+    Alternatively, you can use JWT tokens obtained through wallet signature authentication.
+
+    ## Rate Limits
+
+    | Endpoint Category | Rate Limit |
+    |-------------------|------------|
+    | Authentication | 10 req/15min |
+    | Payments | 60 req/min |
+    | Read operations | 200 req/min |
+    | Write operations | 30 req/min |
+
+    ## Webhooks
+
+    Webhook payloads are signed using HMAC-SHA256. Verify signatures using:
+    ```
+    signature = HMAC-SHA256(timestamp + '.' + payload, webhook_secret)
+    ```
+
+  version: 2.0.0
+  contact:
+    name: NinjaPay Support
+    url: https://ninjapay.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.ninjapay.io
+    description: Production
+  - url: https://api-staging.ninjapay.io
+    description: Staging
+  - url: http://localhost:8001
+    description: Development
+
+tags:
+  - name: Authentication
+    description: Wallet-based authentication endpoints
+  - name: Payment Intents
+    description: Payment intent management
+  - name: Payment Links
+    description: Shareable payment link management
+  - name: Webhooks
+    description: Webhook endpoint management
+  - name: API Keys
+    description: API key management
+  - name: Payroll
+    description: Enterprise payroll management
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [Health]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  version:
+                    type: string
+                    example: 2.0.0
+
+  /v1/auth/nonce:
+    post:
+      summary: Request authentication nonce
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [walletAddress]
+              properties:
+                walletAddress:
+                  type: string
+                  description: Solana wallet address
+                  example: 7xKXtg2CW8ukAp9rXKD2RQU3w5RJKPME6nXbvNfTQAaP
+                type:
+                  type: string
+                  enum: [merchant, company]
+                  default: merchant
+      responses:
+        '200':
+          description: Nonce generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NonceResponse'
+
+  /v1/auth/verify:
+    post:
+      summary: Verify wallet signature
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [walletAddress, signature]
+              properties:
+                walletAddress:
+                  type: string
+                signature:
+                  type: string
+                  description: Base58-encoded signature
+                type:
+                  type: string
+                  enum: [merchant, company]
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /v1/payment_intents:
+    get:
+      summary: List payment intents
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, PROCESSING, CONFIRMED, FINALIZED, FAILED, CANCELLED]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of payment intents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentList'
+
+    post:
+      summary: Create payment intent
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, recipient]
+              properties:
+                amount:
+                  type: number
+                  minimum: 0
+                  description: Payment amount
+                recipient:
+                  type: string
+                  description: Recipient wallet address
+                currency:
+                  type: string
+                  default: USDC
+                description:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: Payment intent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+
+  /v1/payment_intents/{id}:
+    get:
+      summary: Retrieve payment intent
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment intent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      summary: Update payment intent
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: Payment intent updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+
+  /v1/payment_intents/{id}/confirm:
+    post:
+      summary: Confirm payment intent
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment intent confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+
+  /v1/payment_intents/{id}/cancel:
+    post:
+      summary: Cancel payment intent
+      tags: [Payment Intents]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment intent cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+
+  /v1/payment_links:
+    get:
+      summary: List payment links
+      tags: [Payment Links]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: active
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of payment links
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentLinkList'
+
+    post:
+      summary: Create payment link
+      tags: [Payment Links]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                amount:
+                  type: number
+                  description: Fixed amount (optional)
+                currency:
+                  type: string
+                  default: USDC
+                maxUses:
+                  type: integer
+                expiresAt:
+                  type: string
+                  format: date-time
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: Payment link created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentLinkResponse'
+
+  /v1/webhooks:
+    get:
+      summary: List webhooks
+      tags: [Webhooks]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookList'
+
+    post:
+      summary: Create webhook endpoint
+      tags: [Webhooks]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - payment_intent.created
+                      - payment_intent.confirmed
+                      - payment_intent.failed
+                      - payment_intent.cancelled
+                      - payment_link.payment_completed
+                enabled:
+                  type: boolean
+                  default: true
+      responses:
+        '201':
+          description: Webhook created (includes secret)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+
+  /v1/api_keys:
+    get:
+      summary: List API keys
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyList'
+
+    post:
+      summary: Create API key
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                  default: [read, write]
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: API key created (key shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+
+  /v1/payroll/employees:
+    get:
+      summary: List employees
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of employees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeList'
+
+    post:
+      summary: Add employee
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, walletAddress]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                walletAddress:
+                  type: string
+      responses:
+        '201':
+          description: Employee added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeResponse'
+
+  /v1/payroll/batches:
+    get:
+      summary: List payroll batches
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of batches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchList'
+
+    post:
+      summary: Create payroll batch
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payments]
+              properties:
+                payments:
+                  type: array
+                  items:
+                    type: object
+                    required: [employeeId, amount]
+                    properties:
+                      employeeId:
+                        type: string
+                      amount:
+                        type: number
+                currency:
+                  type: string
+                  default: USDC
+      responses:
+        '201':
+          description: Batch created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+
+  /v1/payroll/batches/{id}/execute:
+    post:
+      summary: Execute payroll batch (via MPC)
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch execution started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+
+  /v1/payroll/batches/{id}/settle:
+    post:
+      summary: Direct L1 settlement (bypass MPC)
+      tags: [Payroll]
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Settlement completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    NonceResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            nonce:
+              type: string
+            message:
+              type: string
+            expiresIn:
+              type: integer
+
+    AuthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+            expiresIn:
+              type: integer
+            entityId:
+              type: string
+            type:
+              type: string
+
+    PaymentIntent:
+      type: object
+      properties:
+        id:
+          type: string
+        merchant_id:
+          type: string
+        recipient:
+          type: string
+        amount_commitment:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, confirmed, finalized, failed, cancelled]
+        description:
+          type: string
+        tx_signature:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PaymentIntentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/PaymentIntent'
+        timestamp:
+          type: integer
+
+    PaymentIntentList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentIntent'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    PaymentLink:
+      type: object
+      properties:
+        id:
+          type: string
+        merchant_id:
+          type: string
+        url:
+          type: string
+        name:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        active:
+          type: boolean
+        max_uses:
+          type: integer
+        usage_count:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    PaymentLinkResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/PaymentLink'
+        timestamp:
+          type: integer
+
+    PaymentLinkList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentLink'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+        merchant_id:
+          type: string
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        secret:
+          type: string
+          description: Only returned on creation
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Webhook'
+        timestamp:
+          type: integer
+
+    WebhookList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Webhook'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+        merchant_id:
+          type: string
+        name:
+          type: string
+        key_prefix:
+          type: string
+        key:
+          type: string
+          description: Only returned on creation
+        permissions:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        last_used_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/ApiKey'
+        message:
+          type: string
+        timestamp:
+          type: integer
+
+    ApiKeyList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKey'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    Employee:
+      type: object
+      properties:
+        id:
+          type: string
+        company_id:
+          type: string
+        wallet_address:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    EmployeeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Employee'
+        timestamp:
+          type: integer
+
+    EmployeeList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Employee'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    Batch:
+      type: object
+      properties:
+        id:
+          type: string
+        company_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, completed, failed, cancelled]
+        employee_count:
+          type: integer
+        total_amount:
+          type: number
+        currency:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    BatchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Batch'
+        timestamp:
+          type: integer
+
+    BatchList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Batch'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        timestamp:
+          type: integer
+
+    SettlementResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            batch:
+              $ref: '#/components/schemas/Batch'
+            settlement_result:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                payments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      recipient:
+                        type: string
+                      status:
+                        type: string
+                      signature:
+                        type: string
+        timestamp:
+          type: integer
+
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+        timestamp:
+          type: integer
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

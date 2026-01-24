@@ -1,0 +1,66 @@
+version: '3.8'
+
+# Development-only services (PostgreSQL and Redis)
+# Use this when running the app locally but want database containers
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ninjapay-postgres-dev
+    environment:
+      POSTGRES_USER: ninjapay
+      POSTGRES_PASSWORD: ninjapay_dev
+      POSTGRES_DB: ninjapay
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ninjapay"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ninjapay-redis-dev
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Adminer for database management (optional)
+  adminer:
+    image: adminer:latest
+    container_name: ninjapay-adminer
+    ports:
+      - "8088:8080"
+    depends_on:
+      - postgres
+
+  # Redis Commander for Redis management (optional)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ninjapay-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8089:8081"
+    depends_on:
+      - redis
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+
+networks:
+  default:
+    name: ninjapay-dev-network

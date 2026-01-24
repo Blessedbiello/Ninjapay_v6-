@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ninjapay-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ninjapay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ninjapay_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-ninjapay}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ninjapay}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ninjapay-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-ninjapay_redis}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-ninjapay_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: ninjapay-api
+    environment:
+      NODE_ENV: production
+      API_PORT: 8080
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ninjapay}:${POSTGRES_PASSWORD:-ninjapay_secret}@postgres:5432/${POSTGRES_DB:-ninjapay}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ninjapay_redis}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY}
+      ARCIUM_PROGRAM_ID: ${ARCIUM_PROGRAM_ID}
+      ARCIUM_CLUSTER_ADDRESS: ${ARCIUM_CLUSTER_ADDRESS}
+      ARCIUM_CALLBACK_SECRET: ${ARCIUM_CALLBACK_SECRET}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL}
+      SOLANA_KEYPAIR_PATH: /app/secrets/keypair.json
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET}
+    volumes:
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Unified Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/unified-dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+        NEXT_PUBLIC_SOLANA_RPC_URL: ${NEXT_PUBLIC_SOLANA_RPC_URL}
+        NEXT_PUBLIC_SOLANA_NETWORK: ${NEXT_PUBLIC_SOLANA_NETWORK:-devnet}
+    container_name: ninjapay-dashboard
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Database migrations (runs once)
+  db-migrate:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+      target: builder
+    container_name: ninjapay-migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ninjapay}:${POSTGRES_PASSWORD:-ninjapay_secret}@postgres:5432/${POSTGRES_DB:-ninjapay}
+    command: pnpm --filter @ninjapay/database db:push
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: ninjapay-network

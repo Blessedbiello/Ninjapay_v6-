@@ -8,6 +8,16 @@ import { createLogger } from '@ninjapay/logger';
 import { errorHandler } from './middleware/error-handler.js';
 import { requestLogger } from './middleware/request-logger.js';
 import { rateLimiter } from './middleware/rate-limiter.js';
+import { validateEnv, requireEnv } from './utils/env-validator.js';
+
+// Validate environment at startup
+try {
+  validateEnv();
+} catch (error) {
+  console.error('Failed to start: Environment validation failed');
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}
 
 // Routes
 import healthRoutes from './routes/health.js';
@@ -22,12 +32,13 @@ import checkoutRoutes from './routes/checkout.js';
 
 const logger = createLogger('api-gateway');
 const app = express();
-const PORT = process.env.API_PORT || 8001;
+const env = requireEnv();
+const PORT = env.API_PORT;
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN?.split(',') || '*',
+  origin: env.CORS_ORIGIN?.split(',') || '*',
   credentials: true,
 }));
 
@@ -64,8 +75,10 @@ app.use(errorHandler);
 // Start server
 app.listen(PORT, () => {
   logger.info(`NinjaPay API Gateway running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`CORS enabled for: ${process.env.CORS_ORIGIN || '*'}`);
+  logger.info(`Environment: ${env.NODE_ENV}`);
+  logger.info(`MPC Mode: ${env.MPC_MODE}`);
+  logger.info(`Solana Network: ${env.SOLANA_NETWORK}`);
+  logger.info(`CORS enabled for: ${env.CORS_ORIGIN || '*'}`);
 });
 
 // Graceful shutdown
